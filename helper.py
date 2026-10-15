@@ -1,90 +1,117 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as md
 from pathlib import Path
-import os
 
-OUTPUT_NAME = 'a2-covid-simulation.png'
+import matplotlib
+matplotlib.use("Agg")
+
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import pandas as pd
+from matplotlib.patches import Patch
+
+OUTPUT_NAME = "a2-covid-simulation.png"
+STATES = ["H", "I", "S", "M", "D"]
+STATE_LABELS = {
+    "H": "Healthy",
+    "I": "Infected (without symptoms)",
+    "S": "Infected (with symptoms)",
+    "M": "Immune",
+    "D": "Deceased",
+}
+STATE_COLORS = {
+    "H": "green",
+    "I": "darkorange",
+    "S": "indianred",
+    "M": "lightseagreen",
+    "D": "slategray",
+}
+
+
 def get_filepath(filename):
-    '''
-    Returns full file path 
-    '''
-    source_path = Path(__file__).resolve()
-    source_dir = source_path.parent
-    filepath = os.path.join(source_dir,filename)
-    return filepath
+    """Return a path relative to this module."""
+    return Path(__file__).resolve().parent / filename
+
 
 def save_plot(fig, filename):
-    filepath = get_filepath(filename)    
-    fig.savefig(filepath,dpi=300)
+    """Save a figure as a high-resolution PNG."""
+    output_path = get_filepath(filename)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight", facecolor="white")
+    print(f"Plot saved to: {output_path}")
+
 
 def read_dataset(filename):
+    """Load the country-level simulation summary."""
+    path = get_filepath(filename)
+    if not path.exists():
+        raise FileNotFoundError(f"Summary CSV not found: {path}")
+    return pd.read_csv(path)
 
-    filepath = get_filepath(filename)
-
-    df = pd.read_csv(filepath, sep=',', header= 0)
-
-    return df
 
 def create_plot(summary_csv, countries):
-    '''
-    Creates a plot from the time series of the infection states
+    """Create one stacked-area chart per selected country."""
+    df = read_dataset(summary_csv)
+    required = {"country", "date", *STATES}
+    missing = required.difference(df.columns)
+    if missing:
+        raise ValueError(f"Summary CSV is missing columns: {sorted(missing)}")
+    if not countries:
+        raise ValueError("At least one country must be selected.")
 
-    input:
-    summary_csv
-    countries 
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date", "country"] )
+    for state in STATES:
+        df[state] = pd.to_numeric(df[state], errors="coerce").fillna(0)
 
-    the format of the summary_csv file should be like this, the name of the columns (date,D,H,I,M,S) matters (but not index). 
-    The order of columns does not matter. 'NaN' values can be 0. Float values can be integer.
+    fig, axes = plt.subplots(
+        nrows=len(countries), ncols=1,
+        figsize=(13, 4.2 * len(countries)), squeeze=False,
+        constrained_layout=True,
+    )
+    try:
+        for ax, country in zip(axes[:, 0], countries):
+            country_df = (
+                df[df["country"] == country]
+                .groupby("date")[STATES].sum().sort_index()
+            )
+            ax.set_title(
+                f"COVID-19 Health-State Distribution — {country}",
+                loc="left", fontsize=12, fontweight="bold", pad=10,
+            )
+            if country_df.empty:
+                ax.text(0.5, 0.5, "No simulation data available",
+                        transform=ax.transAxes, ha="center", va="center")
+                continue
 
-    country,date,H,I,S,M,D
-    Afghanistan,2021-04-01,37,0,0,0,0
-    Japan,2021-04-01,121,0,0,0,0
-    Sweden,2021-04-01,9,0,0,0,0
-    Afghanistan,2021-04-02,32,5,0,0,0
-    Japan,2021-04-02,86,35,0,0,0  
+            dates = country_df.index
+            values = country_df[STATES].to_numpy(dtype=float)
+            ax.stackplot(
+                dates, values.T,
+                colors=[STATE_COLORS[s] for s in STATES], alpha=0.85,
+                linewidth=0,
+            )
+            ax.set_xlabel("Date")
+            ax.set_ylabel("Simulated people")
+            ax.set_xlim(dates.min(), dates.max())
+            ax.set_ylim(bottom=0)
+            ax.grid(axis="y", alpha=0.25, linestyle="--")
+            ax.set_axisbelow(True)
 
-    The `countries` is a list of countries. At this moment only an aggregated plot is created (For future, it needs to add a `country` column `states_timeseries_df` 
-    to be able to create subplots)
+            locator = mdates.MonthLocator(interval=2)
+            ax.xaxis.set_major_locator(locator)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+            ax.tick_params(axis="x", labelsize=8)
+            ax.tick_params(axis="y", labelsize=8)
+            plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
 
-    '''
-    states_timeseries_df = read_dataset(summary_csv)
-    
+            handles = [Patch(facecolor=STATE_COLORS[s], label=STATE_LABELS[s]) for s in STATES]
+            ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.01, 1),
+                      fontsize=8, frameon=False)
 
-    print(f'Plotting is being prepared for the following dataset ...')
-    print(states_timeseries_df)
-    states_timeseries_df = states_timeseries_df[['country','date', 'H', 'I', 'S', 'M', 'D']]#reorder columns
-    states_timeseries_df['date'] = pd.to_datetime(states_timeseries_df['date'])
-    states_timeseries_df.set_index('date')
+        fig.suptitle("COVID-19 Simulation Results", fontsize=16, fontweight="bold")
+        save_plot(fig, OUTPUT_NAME)
+    finally:
+        plt.close(fig)
 
-    # Multiple countries in subfigures
-    countries_num = len(countries)
-    fig, ax = plt.subplots(countries_num, figsize =(16,9*countries_num))
-    for i in range(countries_num):
- 
-        states_timeseries_df[states_timeseries_df['country']==countries[i]].plot(
-            kind= 'bar', 
-            x= 'date', 
-            # figsize =(16,9), 
-            stacked=True, 
-            width = 1, 
-            color=['green', 'darkorange', 'indianred', 'lightseagreen', 'slategray'],
-            ax = ax[i])
 
-        ax[i].legend(['Healthy', 'Infected (without symptoms)', 'Infected (with symptoms)', 'Immune', 'Deceased'])
-        
-        # Fix for xticklabels warning
-        selected_dates = states_timeseries_df[states_timeseries_df['country']==countries[i]]['date'].dt.to_period('M').unique()
-        ax[i].set_xticks(range(len(selected_dates)))  # Set the tick positions
-        ax[i].set_xticklabels(selected_dates.strftime('%b %Y'), rotation=30, horizontalalignment="center")  # Set tick labels
-        
-        plot_name = countries[i]
-        ax[i].set_title(f"Covid Infection Status in {plot_name}")
-        ax[i].set_xlabel("Date")
-        ax[i].set_ylabel("Population in Millions")
-
-        ax[i].xaxis.set_major_locator(md.MonthLocator())  # Set locator for major ticks
-
-    save_plot(fig, f'{OUTPUT_NAME}')
-
-    print(f'Plotting Done!')
+if __name__ == "__main__":
+    create_plot("a2-covid-summary-timeseries.csv", ["Sweden", "Japan", "Afghanistan"])

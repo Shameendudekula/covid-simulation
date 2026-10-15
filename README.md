@@ -33,7 +33,7 @@ Open the local URL printed by Streamlit.
 ## Run the assignment test
 
 ```bash
-python test.py
+python -m unittest test.py
 ```
 
 The assignment test runs a full simulation and regenerates the CSV and PNG output files. Because the model is stochastic, the exact values can vary between runs.

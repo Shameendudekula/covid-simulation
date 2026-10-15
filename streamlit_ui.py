@@ -4,6 +4,7 @@ import io
 
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 import assignment2
 
@@ -84,7 +85,7 @@ with st.sidebar:
         format="%.0f",
         help="A larger ratio produces fewer simulated people. Samples are approximate.",
     )
-    run_clicked = st.button("▶ Run simulation", type="primary", use_container_width=True)
+    run_clicked = st.button("▶ Run simulation", type="primary", width="stretch")
     st.divider()
     st.markdown("**Model states**")
     st.markdown("🟢 **H** · Healthy")
@@ -196,15 +197,86 @@ else:
         if view.empty or not state_cols:
             st.warning("No data available for the selected countries.")
         else:
-            daily = view.groupby("date", as_index=True)[state_cols].sum().sort_index()
-            st.area_chart(daily, height=360, use_container_width=True)
-            st.caption("Stacked-area view of daily counts aggregated across the countries selected above.")
+            # Keep country data separate: do not sum countries into one misleading total.
+            for country in visible_countries:
+                country_daily = (
+                    view[view["country"] == country]
+                    .groupby("date", as_index=False)[state_cols]
+                    .sum()
+                    .sort_values("date")
+                )
+                if country_daily.empty:
+                    continue
+                st.markdown(f"#### {country}")
+                chart_data = country_daily.melt(
+                    id_vars="date", value_vars=state_cols,
+                    var_name="state", value_name="people",
+                )
+                chart_data["state_name"] = chart_data["state"].map({
+                    "H": "Healthy", "I": "Infected (asymptomatic)",
+                    "S": "Symptomatic", "M": "Immune", "D": "Deceased",
+                })
+                state_order = {
+                    "Healthy": 0,
+                    "Infected (asymptomatic)": 1,
+                    "Symptomatic": 2,
+                    "Immune": 3,
+                    "Deceased": 4,
+                }
+                chart_data["state_order"] = chart_data["state_name"].map(state_order)
+                chart = (
+                    alt.Chart(chart_data)
+                    .mark_area(opacity=0.82, interpolate="monotone")
+                    
+                    .encode(
+                        x=alt.X(
+                            "date:T",
+                            title="Date",
+                            axis=alt.Axis(format="%b %Y", labelAngle=-35, tickCount=7),
+                        ),
+                        y=alt.Y(
+                            "people:Q",
+                            stack="zero",
+                            title="Simulated people",
+                        ),
+                        color=alt.Color(
+                            "state_name:N",
+                            title="Health state",
+                            scale=alt.Scale(
+                                domain=[
+                                    "Healthy",
+                                    "Infected (asymptomatic)",
+                                    "Symptomatic",
+                                    "Immune",
+                                    "Deceased",
+                                ],
+                                range=[
+                                    "green",
+                                    "darkorange",
+                                    "indianred",
+                                    "lightseagreen",
+                                    "slategray",
+                                ],
+                            ),
+                        ),
+                        order=alt.Order("state_order:Q", sort="ascending"),
+                        tooltip=[
+                            alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
+                            alt.Tooltip("state_name:N", title="State"),
+                            alt.Tooltip("people:Q", title="People", format=",.0f"),
+                        ],
+                    )
+
+                    .properties(height=270)
+                )
+                st.altair_chart(chart, width="stretch")
+            st.caption("Each country is charted separately. Axis labels include month and year; hover for exact dates and counts.")
         left, right = st.columns(2)
         with left:
             st.subheader("Latest state counts")
             if latest_date is not None:
                 latest = view[view["date"] == latest_date].groupby("country")[state_cols].sum()
-                st.dataframe(latest, use_container_width=True)
+                st.dataframe(latest, width="stretch")
         with right:
             st.subheader("Outcome snapshot")
             st.markdown(f"**Symptomatic state-days:** {symptomatic:,}")
@@ -224,11 +296,28 @@ else:
                     "S": "Symptomatic", "M": "Immune", "D": "Deceased"
                 }.get(x, x),
             )
-            pivot = view.pivot_table(index="date", columns="country", values=compare_metric, aggfunc="sum").sort_index()
-            st.line_chart(pivot, height=360, use_container_width=True)
+            compare_df = view[["date", "country", compare_metric]].copy()
+            compare_df = compare_df.sort_values("date")
+            compare_chart = (
+                alt.Chart(compare_df)
+                .mark_line(point=False, strokeWidth=2)
+                .encode(
+                    x=alt.X("date:T", title="Date",
+                            axis=alt.Axis(format="%b %Y", labelAngle=-35, tickCount=7)),
+                    y=alt.Y(f"{compare_metric}:Q", title="Simulated people"),
+                    color=alt.Color("country:N", title="Country"),
+                    tooltip=[
+                        alt.Tooltip("country:N", title="Country"),
+                        alt.Tooltip("date:T", title="Date", format="%d %b %Y"),
+                        alt.Tooltip(f"{compare_metric}:Q", title="People", format=",.0f"),
+                    ],
+                )
+                .properties(height=360)
+            )
+            st.altair_chart(compare_chart, width="stretch")
             country_totals = view.groupby("country")[state_cols].sum().sort_index()
             st.subheader("Aggregated state-days by country")
-            st.bar_chart(country_totals, use_container_width=True)
+            st.bar_chart(country_totals, width="stretch")
     with tab_data:
         st.markdown('<div class="section-kicker">Inspect and export</div>', unsafe_allow_html=True)
         st.subheader("Country summary data")
@@ -237,13 +326,13 @@ else:
         else:
             display_df = view.copy()
             display_df["date"] = display_df["date"].dt.strftime("%Y-%m-%d")
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            st.dataframe(display_df, width="stretch", hide_index=True)
             st.download_button(
                 "⬇ Download filtered summary CSV",
                 data=display_df.to_csv(index=False).encode("utf-8"),
                 file_name="covid-summary-filtered.csv",
                 mime="text/csv",
-                use_container_width=False,
+                width="content",
             )
         if not sim_df.empty:
             st.subheader("Individual-level simulation records")
@@ -267,6 +356,6 @@ else:
             {"Code":"S","Meaning":"Infected with symptoms"},
             {"Code":"M","Meaning":"Immune"},
             {"Code":"D","Meaning":"Deceased"},
-        ]), use_container_width=True, hide_index=True)
+        ]), width="stretch", hide_index=True)
 
 st.markdown('<div class="footer">COVID-19 Simulation Lab · Python · Pandas · Streamlit · Matplotlib<br>Educational simulation, not medical advice.</div>', unsafe_allow_html=True)
